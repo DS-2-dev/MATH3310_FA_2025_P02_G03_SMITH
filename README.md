@@ -1,0 +1,2 @@
+# MATH3310_FA_2025_P02_G03_SMITH
+Group Project 2
