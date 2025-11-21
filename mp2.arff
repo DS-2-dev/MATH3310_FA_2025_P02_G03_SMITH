@@ -1,0 +1,8 @@
+@RELATION test
+
+@ATTRIBUTE attr1 NUMERIC
+@ATTRIBUTE class {benign,malignant}
+
+@DATA
+1,benign
+2,malignant

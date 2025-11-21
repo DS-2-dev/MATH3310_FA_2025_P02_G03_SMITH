@@ -1,0 +1,202 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "language": "markdown"
+      },
+      "source": [
+        "# mp2 — Mammography data loader\n",
+        "\n",
+        "This notebook contains the same functionality as `mp2.py` but split into cells so you can run and inspect intermediate results.\n",
+        "\n",
+        "Usage: run the code cells in order. The notebook provides: imports, a robust ARFF loader (SciPy or liac-arff), an OpenML loader (via scikit-learn), and example cells that load and save CSV output."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "language": "python"
+      },
+      "source": [
+        "import sys\n",
+        "import pandas as pd\n",
+        "import os\n",
+        "\n",
+        "# Robust ARFF loader: prefer SciPy, fall back to liac-arff\n",
+        "def _make_arff_loader():\n",
+        "    try:\n",
+        "        from scipy.io import arff as _scipy_arff\n",
+        "        def _load_arff(path):\n",
+        "            return _scipy_arff.loadarff(path)\n",
+        "        return _load_arff\n",
+        "    except Exception:\n",
+        "        try:\n",
+        "            import liac_arff as _liac\n",
+        "            def _load_arff(path):\n",
+        "                with open(path, 'r') as f:\n",
+        "                    obj = _liac.load(f)\n",
+        "                return obj.get('data', []), obj.get('attributes', None)\n",
+        "            return _load_arff\n",
+        "        except Exception:\n",
+        "            def _no_loader(path):\n",
+        "                raise RuntimeError(\n",
+        "                    \"No ARFF loader available. Install 'scipy' or 'liac-arff'.\"\n",
+        "                )\n",
+        "            return _no_loader\n",
+        "\n",
+        "# create loader function\n",
+        "load_arff = _make_arff_loader()\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "language": "python"
+      },
+      "source": [
+        "def load_from_openml(name: str = 'mammography', version: int = 1) -> pd.DataFrame:\n",
+        "    \"\"\"Fetch dataset from OpenML and return a DataFrame with a `class` column.\n",
+        "\n",
+        "    This function will attempt to convert target labels of -1 to 0 and leave 1 as-is.\n",
+        "    If scikit-learn is not installed, it will raise an informative error.\n",
+        "    \"\"\"\n",
+        "    try:\n",
+        "        from sklearn.datasets import fetch_openml\n",
+        "    except Exception as e:\n",
+        "        raise RuntimeError('scikit-learn is required to load from OpenML: ' + str(e))\n",
+        "\n",
+        "    data = fetch_openml(name=name, version=version, as_frame=True)\n",
+        "    df = data.frame.copy()\n",
+        "\n",
+        "    target_series = None\n",
+        "    if hasattr(data, 'target') and data.target is not None:\n",
+        "        target_series = data.target\n",
+        "    else:\n",
+        "        for candidate in ('class', 'target', 'y'):\n",
+        "            if candidate in df.columns:\n",
+        "                target_series = df[candidate]\n",
+        "                break\n",
+        "\n",
+        "    if target_series is not None:\n",
+        "        try:\n",
+        "            t = target_series.astype(int)\n",
+        "        except Exception:\n",
+        "            t = target_series.replace({'-1': -1, '1': 1, '-1.0': -1, '1.0': 1})\n",
+        "            try:\n",
+        "                t = t.astype(int)\n",
+        "            except Exception:\n",
+        "                t = target_series\n",
+        "\n",
+        "        try:\n",
+        "            t = t.replace({-1: 0})\n",
+        "        except Exception:\n",
+        "            pass\n",
+        "\n",
+        "        df['class'] = t\n",
+        "    else:\n",
+        "        print('Warning: could not find target column in OpenML dataset; saving full frame as-is.')\n",
+        "\n",
+        "    return df\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "language": "python"
+      },
+      "source": [
+        "def load_from_arff(arff_path: str) -> pd.DataFrame:\n",
+        "    if not os.path.exists(arff_path):\n",
+        "        raise FileNotFoundError(f'ARFF file not found: {arff_path}')\n",
+        "\n",
+        "    data, meta = load_arff(arff_path)\n",
+        "    df = pd.DataFrame(data)\n",
+        "\n",
+        "    # Normalize a `class` column if present (decode bytes / numeric conversion)\n",
+        "    class_col = None\n",
+        "    for col in df.columns:\n",
+        "        if col.lower() == 'class':\n",
+        "            class_col = col\n",
+        "            break\n",
+        "\n",
+        "    if class_col is not None:\n",
+        "        def normalize_label(x):\n",
+        "            if pd.isnull(x):\n",
+        "                return x\n",
+        "            try:\n",
+        "                if hasattr(x, 'decode'):\n",
+        "                    x = x.decode('utf-8')\n",
+        "            except Exception:\n",
+        "                pass\n",
+        "            try:\n",
+        "                xi = int(x)\n",
+        "                if xi == -1:\n",
+        "                    return 0\n",
+        "                return xi\n",
+        "            except Exception:\n",
+        "                return str(x)\n",
+        "\n",
+        "        df['class'] = df[class_col].apply(normalize_label)\n",
+        "    else:\n",
+        "        print("Warning: no 'class' column found in ARFF data. Proceeding without decoding step.")\n",
+        "\n",
+        "    return df\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "language": "markdown"
+      },
+      "source": [
+        "## Example: load local ARFF and save CSV\n",
+        "Run the cell below to load `mp2.arff` (must be present in the workspace) and write `Mammography_from_notebook.csv`."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "language": "python"
+      },
+      "source": [
+        "# Load local ARFF (example)\n",
+        "try:\n",
+        "    df = load_from_arff('mp2.arff')\n",
+        "    display(df.head())\n",
+        "    df.to_csv('Mammography_from_notebook.csv', index=False)\n",
+        "    print('Saved Mammography_from_notebook.csv')\n",
+        "except FileNotFoundError as e:\n",
+        "    print(e)\n",
+        "except Exception as e:\n",
+        "    print('Error while loading ARFF:', e)\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "language": "markdown"
+      },
+      "source": [
+        "## Example: fetch from OpenML (network + scikit-learn required)\n",
+        "Use this cell to fetch the Mammography dataset directly from OpenML. This requires `scikit-learn` and network access."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "language": "python"
+      },
+      "source": [
+        "# Fetch from OpenML (may require network access)\n",
+        "try:\n",
+        "    df_openml = load_from_openml()\n",
+        "    display(df_openml.head())\n",
+        "    df_openml.to_csv('Mammography_from_openml.csv', index=False)\n",
+        "    print('Saved Mammography_from_openml.csv')\n",
+        "except Exception as e:\n",
+        "    print('OpenML fetch failed:', e)\n"
+      ]
+    }
+  ]
+}
