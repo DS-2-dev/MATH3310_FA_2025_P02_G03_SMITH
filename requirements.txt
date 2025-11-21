@@ -1,4 +1,12 @@
-pandas
+numpy>=1.24
+pandas>=2.0
+scikit-learn>=1.2
+matplotlib>=3.6
+seaborn>=0.12
+joblib
+imbalanced-learn>=0.10
+shap>=0.41
+scipy>=1.10pandas
 scipy
 scikit-learn
 liac-arff
