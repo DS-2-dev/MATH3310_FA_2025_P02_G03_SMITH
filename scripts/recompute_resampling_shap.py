@@ -10,9 +10,20 @@ Run inside the repository venv: `.venv/bin/python scripts/recompute_resampling_s
 import warnings
 warnings.filterwarnings("ignore")
 
+import os
+import random
+
+# Make results reproducible/deterministic where possible
+SEED = 42
+# PYTHONHASHSEED controls hash randomization
+os.environ.setdefault('PYTHONHASHSEED', str(SEED))
+random.seed(SEED)
+
 from pathlib import Path
 import numpy as np
 import pandas as pd
+# numpy RNG seed
+np.random.seed(SEED)
 
 from sklearn.datasets import fetch_openml
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score, cross_val_predict
@@ -62,24 +73,25 @@ def main():
         ]
     )
 
-    base_clf = RandomForestClassifier(random_state=42, n_jobs=-1)
+    # Use single-threaded training/prediction to reduce nondeterminism from parallelism
+    base_clf = RandomForestClassifier(random_state=SEED, n_jobs=1)
     baseline_pipe = Pipeline([("preproc", preprocessor), ("clf", base_clf)])
 
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
     # Baseline CV
     print("Running baseline CV (ROC AUC)...")
-    baseline_aucs = cross_val_score(baseline_pipe, X_train, y_train, cv=cv, scoring="roc_auc", n_jobs=-1)
+    baseline_aucs = cross_val_score(baseline_pipe, X_train, y_train, cv=cv, scoring="roc_auc", n_jobs=1)
     print("Baseline ROC AUC mean:", baseline_aucs.mean())
 
     # Weighted RF variants
     print("Evaluating weighted RandomForest variants...")
     weighted_rows = []
     for name, cw in [("unweighted", None), ("balanced", "balanced"), ("balanced_subsample", "balanced_subsample")]:
-        clf = RandomForestClassifier(class_weight=cw, random_state=42, n_jobs=-1)
+        clf = RandomForestClassifier(class_weight=cw, random_state=SEED, n_jobs=1)
         pipe = Pipeline([("preproc", preprocessor), ("clf", clf)])
-        aucs = cross_val_score(pipe, X_train, y_train, cv=cv, scoring="roc_auc", n_jobs=-1)
-        preds = cross_val_predict(pipe, X_train, y_train, cv=cv, n_jobs=-1)
+        aucs = cross_val_score(pipe, X_train, y_train, cv=cv, scoring="roc_auc", n_jobs=1)
+        preds = cross_val_predict(pipe, X_train, y_train, cv=cv, n_jobs=1)
         from sklearn.metrics import precision_score, recall_score
         weighted_rows.append({
             "variant": name,
@@ -112,8 +124,8 @@ def main():
 
     res_rows = []
     # baseline
-    aucs = cross_val_score(baseline_pipe, X_train, y_train, cv=cv, scoring="roc_auc", n_jobs=-1)
-    preds = cross_val_predict(baseline_pipe, X_train, y_train, cv=cv, n_jobs=-1)
+    aucs = cross_val_score(baseline_pipe, X_train, y_train, cv=cv, scoring="roc_auc", n_jobs=1)
+    preds = cross_val_predict(baseline_pipe, X_train, y_train, cv=cv, n_jobs=1)
     from sklearn.metrics import precision_score, recall_score
     res_rows.append({
         "resampling": "none",
@@ -128,11 +140,11 @@ def main():
     })
 
     if smote_available:
-        smote_pipe = ImbPipeline([("preproc", preprocessor), ("smote", SMOTE(random_state=42)), ("clf", RandomForestClassifier(random_state=42, n_jobs=-1))])
-        rus_pipe = ImbPipeline([("preproc", preprocessor), ("rus", RandomUnderSampler(random_state=42)), ("clf", RandomForestClassifier(random_state=42, n_jobs=-1))])
+        smote_pipe = ImbPipeline([("preproc", preprocessor), ("smote", SMOTE(random_state=SEED)), ("clf", RandomForestClassifier(random_state=SEED, n_jobs=1))])
+        rus_pipe = ImbPipeline([("preproc", preprocessor), ("rus", RandomUnderSampler(random_state=SEED)), ("clf", RandomForestClassifier(random_state=SEED, n_jobs=1))])
         for name, p in [("SMOTE", smote_pipe), ("RandomUnderSampler", rus_pipe)]:
-            aucs = cross_val_score(p, X_train, y_train, cv=cv, scoring="roc_auc", n_jobs=-1)
-            preds = cross_val_predict(p, X_train, y_train, cv=cv, n_jobs=-1)
+            aucs = cross_val_score(p, X_train, y_train, cv=cv, scoring="roc_auc", n_jobs=1)
+            preds = cross_val_predict(p, X_train, y_train, cv=cv, n_jobs=1)
             res_rows.append({
                 "resampling": name,
                 "roc_auc_mean": aucs.mean(),
@@ -150,7 +162,7 @@ def main():
 
     # Detailed metrics
     print("Computing detailed metrics (error, f1, gmean) for baseline RF...")
-    preds = cross_val_predict(baseline_pipe, X_train, y_train, cv=cv, n_jobs=-1)
+    preds = cross_val_predict(baseline_pipe, X_train, y_train, cv=cv, n_jobs=1)
     err = 1 - accuracy_score(y_train, preds)
     f1 = f1_score(y_train, preds, average="binary")
     g = gmean_from_confmat(y_train, preds)
@@ -184,7 +196,8 @@ def main():
         feat_names = [f"f{i}" for i in range(baseline_pipe.named_steps["clf"].n_features_)]
 
     mdi = baseline_pipe.named_steps["clf"].feature_importances_
-    perm = permutation_importance(baseline_pipe, X_test, y_test, n_repeats=20, random_state=42, n_jobs=-1, scoring="roc_auc")
+    # permutation_importance: set random_state and single-threaded for reproducibility
+    perm = permutation_importance(baseline_pipe, X_test, y_test, n_repeats=20, random_state=SEED, n_jobs=1, scoring="roc_auc")
 
     fi_df = pd.DataFrame({
         "feature": feat_names,
